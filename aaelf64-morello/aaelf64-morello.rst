@@ -13,6 +13,8 @@
 .. _MORELLO_ARM: https://developer.arm.com/documentation/ddi0606/latest
 .. |tlsdesc-url| replace:: http://www.fsfla.org/~lxoliva/writeups/TLS/paper-lk2006.pdf
 .. _TLSDESC: http://www.fsfla.org/~lxoliva/writeups/TLS/paper-lk2006.pdf
+.. |tls-url| replace:: https://akkadia.org/drepper/tls.pdf
+.. _TLS: https://akkadia.org/drepper/tls.pdf
 
 Morello extensions to ELF for the Arm\ :sup:`®` 64-bit Architecture (AArch64)
 *****************************************************************************
@@ -219,6 +221,8 @@ This document refers to, or is referred to by, the following documents.
   | MORELLO_ARM_     | DDI0606                    | Arm® Architecture Reference Manual Supplement Morello for A-profile Architecture. |
   +------------------+----------------------------+-----------------------------------------------------------------------------------+
   | TLSDESC_         | |tlsdesc-url|              | TLS Descriptors for Arm. Original proposal document.                              |
+  +------------------+----------------------------+-----------------------------------------------------------------------------------+
+  | TLS_             | |tls-url|                  | ELF Handling For Thread-Local Storage                                             |
   +------------------+----------------------------+-----------------------------------------------------------------------------------+
 
 Terms and abbreviations
@@ -566,7 +570,7 @@ Morello only defines the relocations needed to implement the descriptor based
 thread-local storage (TLS) models in a SysV-type environment. The details of
 TLS descriptors are beyond the scope of this specification; a general
 introduction can be found in [TLSDESC_]. Also, only the relocations needed to
-implement the Global Dynamic (GD) access model and the Local Executable (LE)
+implement the General Dynamic (GD) access model and the Local Executable (LE)
 access models are defined.
 
 Relocations needed to define the traditional TLS models are undefined.
@@ -590,6 +594,19 @@ Relocations needed to define the traditional TLS models are undefined.
     |       |                                  |                            | instruction which performs an indirect call to the TLS    |
     |       |                                  |                            | descriptor function for ``S + A``.                        |
     +-------+----------------------------------+----------------------------+-----------------------------------------------------------+
+
+The General Dynamic access sequence must be output in the following form to
+allow correct linker relaxation:
+
+.. code-block:: text
+
+  adrp c0, :tlsdesc:sym
+  ldr c1, [c0, :tlsdesc_lo12:sym]
+  add c0, c0, :tlsdesc_lo12:sym
+  .tlsdesccall sym
+  blr c1
+  nop
+
 
 Dynamic Morello relocations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -830,3 +847,91 @@ veneer is used. The BX changes the execution state from A64 to C64:
   adrp c16, sym
   add c16, c16, :lo12:sym
   br c16
+
+TLS for the pure capability ABI
+-------------------------------
+
+The design is based on TLSDESC, with the purpose of minimizing the performance
+differences between A64 and C64, while providing strict bounds when resolving
+TLS globals. Only the General Dynamic access model and the relaxation from
+General Dynamic to Local Exec are currently specified. However, this leaves the
+opportunity to add support for the other access models in the future.
+
+TLS static block
+^^^^^^^^^^^^^^^^
+
+The static block layout is the same used in AArch64 (Variant 1, see [TLS_]), with
+the only exception that TCB and the DTV pointer are capabilities.
+
+Thread pointer
+^^^^^^^^^^^^^^
+
+The thread pointer is a capability, held in ``CTPIDR_EL0``. The thread pointer
+needs to have the read, write, read capability and write capability permissions
+and bounds such that the entire TLS static block is accessible.
+
+Resolver functions
+^^^^^^^^^^^^^^^^^^
+
+A resolver function takes arguments in c0 (address of the TLS GOT slot), and c2
+(a copy of the thread pointer) and returns a pointer to the TLS global in c0
+and its size in x1. The resolver function has a custom calling convention that
+must preserve all registers except c0 and c1.
+
+Considerations:
+
+- Any dynamically loaded modules will be placed outside of the bounds of the
+  thread pointer, so a resolver function cannot return an offset from the
+  thread pointer, but rather needs to return a pointer (capability).
+- To minimize reading of ``CTPIDR_EL0``, the resolver functions take a
+  copy of ``CTPIDR_EL0`` as an argument and preserve it.
+- Not setting the bounds directly in the resolver allows shorter sequences
+  for the General Dynamic access model.
+
+
+Static TLS block resolver
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the TLS variable is in the static block, while resolving the
+``R_MORELLO_TLSDESC`` relocation, the dynamic linker will place in the two GOT
+slots associated with this variable:
+
+- A capability to the static TLS block resolver function at offset 0.
+- The offset of the variable in the static TLS block at offset 16 (8 bytes).
+- The size of the variable at offset 24 (8 bytes).
+
+An implementation of the static block resolver could be the following:
+
+.. code-block:: text
+
+  ldp x0, x1 [c0, #16]
+  add c0, c2, x0
+  ret c30
+
+General Dynamic
+^^^^^^^^^^^^^^^
+
+The instruction sequence used for the General Dynamic access model is similar to
+that of other TLSDESC implementations, with the exception that the result
+doesn't need to be added to the thread pointer. However c2 needs to contain
+the thread pointer. The instruction sequence contains an additional NOP
+instruction in order to permit the static linker to relax to Local Exec.
+
+.. code-block:: text
+
+  adrp c0, :tlsdesc:sym
+  ldr c1, [c0, :tlsdesc_lo12:sym]
+  add c0, c0, :tlsdesc_lo12:sym
+  .tlsdesccall sym
+  blr c1
+  nop
+
+The compiler will emit a bounds setting instruction on c0 using the size
+returned in x1.
+
+General Dynamic to Local Exec relaxation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The relaxed sequence will use pairs of movz/movk instructions to materialize
+the size and offset. The offset to the thread pointer (c2) and the result is
+returned in c0, while the size is returned in x1.

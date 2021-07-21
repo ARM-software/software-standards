@@ -14,7 +14,7 @@
 .. _LSB: https://refspecs.linuxfoundation.org/LSB_1.2.0/gLSB/noteabitag.html
 .. _SCO-ELF: http://www.sco.com/developers/gabi/
 .. _TLSDESC: http://www.fsfla.org/~lxoliva/writeups/TLS/paper-lk2006.pdf
-
+.. _LINUX_ABI: https://github.com/hjl-tools/linux-abi/wiki
 .. footer::
 
    ###Page###
@@ -253,6 +253,8 @@ This document refers to, or is referred to by, the following documents.
   | TLSDESC_                                                                                | http://www.fsfla.org/~lxoliva/writeups/TLS/paper-lk2006.pdf | TLS Descriptors for Arm. Original proposal document                      |
   +-----------------------------------------------------------------------------------------+-------------------------------------------------------------+--------------------------------------------------------------------------+
   | `GABI_SHT_RELR <https://groups.google.com/d/msg/generic-abi/bX460iggiKg/YT2RrjpMAwAJ>`_ | ELF GABI Google Groups                                      | Proposal for a new section type SHT_RELR                                 |
+  +-----------------------------------------------------------------------------------------+-------------------------------------------------------------+--------------------------------------------------------------------------+
+  | LINUX_ABI                                                                               | https://github.com/hjl-tools/linux-abi/wiki                 | Linux Extensions to gABI                                                 |
   +-----------------------------------------------------------------------------------------+-------------------------------------------------------------+--------------------------------------------------------------------------+
 
 Terms and Abbreviations
@@ -832,19 +834,17 @@ language to signing schema is expected to evolve over time. Even if
 the low-level ELF extensions remain constant, a change to the
 high-level language mapping may result in incompatible ELF files.
 
+A processor-specific program property type
+``GNU_PROPERTY_AARCH64_FEATURE_PAUTH`` is defined in section
+``.note.gnu.property`` [LINUX_ABI_] with a value of ``0xc0000001``.
 Every relocatable object, executable and shared library that uses the
-PAuth ABI ELF extensions must have a section named
-``.note.AARCH64-PAUTH-ABI-tag`` of type ``SHT_NOTE``. This section is
-structured as a note section as documented in SCO-ELF_.
-
-The name field (``namesz`` / ``name``) contains the string "ARM". The
-type field shall be 1, and the ``descsz`` field must be at least 16.
-The first 16 bytes of the description must contain 2 64-bit words, with
-the first 64-bit word being a platform identifier, and the second
-64-bit word being a version number for the ABI for the platform
-identified for the first word. When ``descsz`` is larger than 16 the
-remainder of the contents of desc are defined by the (platform id,
-version number).
+PAuth ABI ELF extensions must contain this property. The format of
+the data in ``pr_data`` is at least two 64-bit words, the first being
+a platform identifier, and the second being a version number specific
+to the platform identified in the first word. Consequently, the
+``pr_datasz`` field must be at least 16. When ``pr_datasz`` is larger
+than 16, the remainder of the contents of ``pr_data`` are specific
+to the (platform id, version number).
 
 This ABI does not determine the format of the platform identifier. Arm
 reserves the platform id 0 for a bare-metal platform.
@@ -853,10 +853,9 @@ The (platform id, version number) of (0, 0) is reserved as an invalid
 combination. The program cannot be run when pointer authentication is
 enabled.
 
-The version id in ``.note.AARCH64-PAUTH-ABI-tag`` is not directly
-related to the version number of this document. It is controlled by
-the object-producer based on the signing schema that have been used
-for pointers.
+The version is not directly related to the version number of this
+document. It is controlled by the object-producer based on the signing
+schema that has been used for pointers.
 
 Base Compatibility Model
 ------------------------
@@ -864,23 +863,26 @@ Base Compatibility Model
 A per-ELF file marking scheme permits a coarse way of reasoning about
 compatibility.
 
-* The absence of a ``.note.AARCH64-PAUTH-ABI-tag`` section means no
-  information on how pointers are signed is available for this ELF
-  file.
+* The absence of ``GNU_PROPERTY_AARCH64_FEATURE_PAUTH``
+  means no information on how pointers are signed is available for this
+  ELF file.
 
-* The presence of a ``.note.AARCH64-PAUTH-ABI-tag`` means that the
+* The presence of ``GNU_PROPERTY_AARCH64_FEATURE_PAUTH``
+  with (platform id, version number) other than (0, 0) means that the
   pointers were signed in a compatible way with the default signing
   rules for tuple (platform id, version number).
 
-* The static linker may fault the combination of relocatable
-  objects that contain ``.note.AARCH64-PAUTH-ABI-tag`` sections with
-  incompatible (platform id, version number) tuples. If an ELF file is
+* The static linker may fault the combination of relocatable objects
+  that contain ``GNU_PROPERTY_AARCH64_FEATURE_PAUTH``
+  with incompatible (platform id, version number) tuples. If an ELF file is
   produced, the output ``.note.AARCH64-PAUTH-ABI-tag`` must have the
   invalid (platform id, version number) of (0, 0).
 
 * The combination of relocatable objects with
-  ``.note.AARCH64-PAUTH-ABI-tag`` and relocatable objects without a
-  ``.note.AARCH64-PAUTH-ABI-tag`` is not defined by this ABI.
+  ``GNU_PROPERTY_AARCH64_FEATURE_PAUTH``
+  and relocatable objects without a
+  ``GNU_PROPERTY_AARCH64_FEATURE_PAUTH`` is not defined
+  by this ABI.
 
 * A dynamic loader that encounters a (platform id, version number)
   that it does not recognize, or if the (platform id, version number)
